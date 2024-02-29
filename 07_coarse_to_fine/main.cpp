@@ -6,7 +6,10 @@
 #include <igl/Timer.h>
 // #include <igl/embree/unproject_onto_mesh.h>
 #include <igl/opengl/glfw/Viewer.h>
+#include <igl/parallel_for.h>
 #include <igl/png/writePNG.h>
+
+#include <igl/unproject_onto_mesh.h>
 #include <iostream>
 #include <vector>
 
@@ -17,17 +20,36 @@
 typedef std::tuple<Eigen::Matrix4f, Eigen::Matrix4f, Eigen::Vector4f>
     camera_info;
 
-std::tuple<std::vector<std::vector<int>>,
-           std::vector<std::vector<Eigen::Vector3d>>>
+std::tuple<std::vector<int>, std::vector<Eigen::Vector3d>>
 get_pt_mat(camera_info cam, const Eigen::MatrixXd &V, const Eigen::MatrixXi &F,
            int W, int H) {
   auto view = std::get<0>(cam);
   auto proj = std::get<1>(cam);
   auto vp = std::get<2>(cam);
 
+  std::vector<int> fids(W * H, -1);
+  std::vector<Eigen::Vector3d> bcs(W * H);
+
+  igl::parallel_for(
+      V.rows(),
+      [&](int id) {
+        int i = id / W;
+        int j = id % W;
+        int fid;
+        Eigen::Vector3f bc;
+        double x = vp(2) / (double)W * (j + 0.5);
+        double y = vp(3) / (double)H * (H - i - 0.5);
+
+        if (igl::unproject_onto_mesh(Eigen::Vector2f(x, y), view, proj, vp, V,
+                                     F, fid, bc)) {
+          fids[id] = fid;
+          bcs[id] = bc.cast<double>();
+        }
+      },
+      W * H);
+
   // TODO: implement this function
-  return std::make_tuple(std::vector<std::vector<int>>(),
-                         std::vector<std::vector<Eigen::Vector3d>>());
+  return std::make_tuple(std::vector<int>(), std::vector<Eigen::Vector3d>());
 };
 
 int main(int argc, char *argv[]) {
