@@ -26,30 +26,27 @@ get_pt_mat(camera_info cam, const Eigen::MatrixXd &V, const Eigen::MatrixXi &F,
   auto view = std::get<0>(cam);
   auto proj = std::get<1>(cam);
   auto vp = std::get<2>(cam);
-
+  std::cout << "view: " << view << std::endl;
+  std::cout << "proj: " << proj << std::endl;
+  std::cout << "vp: " << vp << std::endl;
   std::vector<int> fids(W * H, -1);
   std::vector<Eigen::Vector3d> bcs(W * H);
 
-  igl::parallel_for(
-      V.rows(),
-      [&](int id) {
-        int i = id / W;
-        int j = id % W;
-        int fid;
-        Eigen::Vector3f bc;
-        double x = vp(2) / (double)W * (j + 0.5);
-        double y = vp(3) / (double)H * (H - i - 0.5);
+  igl::parallel_for(W * H, [&](int id) {
+    int i = id / W;
+    int j = id % W;
+    int fid;
+    Eigen::Vector3f bc;
+    double x = vp(2) / (double)W * (j + 0.5);
+    double y = vp(3) / (double)H * (H - i - 0.5);
+    if (igl::unproject_onto_mesh(Eigen::Vector2f(x, y), view, proj, vp, V, F,
+                                 fid, bc)) {
+      fids[id] = fid;
+      bcs[id] = bc.cast<double>();
+    }
+  });
 
-        if (igl::unproject_onto_mesh(Eigen::Vector2f(x, y), view, proj, vp, V,
-                                     F, fid, bc)) {
-          fids[id] = fid;
-          bcs[id] = bc.cast<double>();
-        }
-      },
-      W * H);
-
-  // TODO: implement this function
-  return std::make_tuple(std::vector<int>(), std::vector<Eigen::Vector3d>());
+  return std::make_tuple(fids, bcs);
 };
 
 int main(int argc, char *argv[]) {
@@ -107,14 +104,6 @@ int main(int argc, char *argv[]) {
   timer.stop();
   cout << "query time: " << timer.getElapsedTime() << " s" << endl;
 
-  // funciton to generate the picture
-  auto writePNG = [&](const std::string &name, int W, int H,
-                      Eigen::Matrix4f view, Eigen::Matrix4f proj,
-                      Eigen::Vector4f vp) {
-    Eigen::Matrix<unsigned char, Eigen::Dynamic, Eigen::Dynamic> R, G, B, A;
-    igl::png::writePNG(R, G, B, A, name);
-  };
-
   // compute point location on the fine mesh
   MatrixXd pt(BC.rows(), 3);
   pt.setZero();
@@ -123,36 +112,91 @@ int main(int argc, char *argv[]) {
                  BC(ii, 2) * VO.row(BF(ii, 2));
   }
 
-  // visualize the prolongation operator
-  igl::opengl::glfw::Viewer viewer;
-  Vector4f backColor;
-  backColor << 208 / 255., 237 / 255., 227 / 255., 1.;
-  viewer.core().background_color = backColor;
-  viewer.data().set_mesh(VO, FO);
-  const Eigen::RowVector3d blue(149.0 / 255, 217.0 / 255, 244.0 / 255);
-  viewer.data().set_colors(blue);
-  viewer.data().add_points(pt, Eigen::RowVector3d(0, 0, 0));
-  viewer.data().point_size = 10;
+  // funciton to generate the picture
+  auto writePNG = [&](const std::string &name, int W, int H, camera_info cam) {
+    Eigen::Matrix<unsigned char, Eigen::Dynamic, Eigen::Dynamic> R, G, B, A;
+    R.resize(W, H);
+    G.resize(W, H);
+    B.resize(W, H);
+    A.resize(W, H);
+    R.setConstant(255);
+    G.setConstant(255);
+    B.setConstant(255);
+    A.setConstant(255);
 
-  viewer.callback_key_down = [&](igl::opengl::glfw::Viewer &viewer,
-                                 unsigned char key, int mod) -> bool {
-    switch (key) {
-    case '0':
-      viewer.data().clear();
-      viewer.data().set_mesh(VO, FO);
-      viewer.data().set_colors(blue);
-      viewer.data().add_points(pt, Eigen::RowVector3d(0, 0, 0));
-      viewer.data().point_size = 10;
-      break;
-    case '1':
-      viewer.data().clear();
-      viewer.data().set_mesh(V, F);
-      viewer.data().set_colors(blue);
-      break;
-    default:
-      return false;
+    auto [fids, bcs] = get_pt_mat(cam, V, F, W, H);
+
+    MatrixXd BC_new(fids.size(), 3);
+    MatrixXi BF_new(fids.size(), 3);
+    VectorXi FIdx_new(fids.size());
+    BC_new.setZero();
+    BF_new.setZero();
+    FIdx_new.setZero();
+    for (int ii = 0; ii < fids.size(); ii++) {
+      if (fids[ii] == -1) {
+        BF_new.row(ii) = F.row(0);
+        continue;
+      }
+      BC_new.row(ii) = bcs[ii].transpose();
+      BF_new.row(ii) = F.row(fids[ii]);
+      FIdx_new(ii) = fids[ii];
     }
-    return true;
+    timer.start();
+    query_coarse_to_fine(decInfo, IM, decIM, IMF, BC_new, BF_new, FIdx_new);
+    timer.stop();
+    cout << "query time: " << timer.getElapsedTime() << " s" << endl;
+
+    igl::parallel_for(W * H, [&](int id) {
+      if (fids[id] != -1) {
+        double local_r, local_g, local_b;
+        igl::colormap(igl::ColorMapType::COLOR_MAP_TYPE_JET,
+                      FIdx_new[id] % 100 / 100.0, local_r, local_g, local_b);
+        R(id % W, H - id / W) = (int)255 * local_r;
+        G(id % W, H - id / W) = (int)255 * local_b;
+        B(id % W, H - id / W) = (int)255 * local_g;
+      }
+    });
+    igl::png::writePNG(R, G, B, A, name);
   };
+
+  igl::opengl::glfw::Viewer viewer;
+  viewer.data().set_mesh(V, F);
   viewer.launch();
+  camera_info camera = std::make_tuple(viewer.core().view, viewer.core().proj,
+                                       viewer.core().viewport);
+  writePNG("output.png", 1920, 1080, camera);
+  /*
+    // visualize the prolongation operator
+    igl::opengl::glfw::Viewer viewer;
+    Vector4f backColor;
+    backColor << 208 / 255., 237 / 255., 227 / 255., 1.;
+    viewer.core().background_color = backColor;
+    viewer.data().set_mesh(VO, FO);
+    const Eigen::RowVector3d blue(149.0 / 255, 217.0 / 255, 244.0 / 255);
+    viewer.data().set_colors(blue);
+    viewer.data().add_points(pt, Eigen::RowVector3d(0, 0, 0));
+    viewer.data().point_size = 10;
+
+    viewer.callback_key_down = [&](igl::opengl::glfw::Viewer &viewer,
+                                   unsigned char key, int mod) -> bool {
+      switch (key) {
+      case '0':
+        viewer.data().clear();
+        viewer.data().set_mesh(VO, FO);
+        viewer.data().set_colors(blue);
+        viewer.data().add_points(pt, Eigen::RowVector3d(0, 0, 0));
+        viewer.data().point_size = 10;
+        break;
+      case '1':
+        viewer.data().clear();
+        viewer.data().set_mesh(V, F);
+        viewer.data().set_colors(blue);
+        break;
+      default:
+        return false;
+      }
+      return true;
+    };
+    viewer.launch();
+    */
 }
