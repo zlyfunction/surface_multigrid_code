@@ -5,15 +5,15 @@
 #include <Eigen/Sparse>
 #include <igl/Timer.h>
 // #include <igl/embree/unproject_onto_mesh.h>
+#include "utils.hpp"
+#include <SSP_decimate.h>
 #include <igl/opengl/glfw/Viewer.h>
 #include <igl/parallel_for.h>
 #include <igl/png/writePNG.h>
 #include <iostream>
-#include <vector>
-#include "utils.hpp"
-#include <SSP_decimate.h>
 #include <query_coarse_to_fine.h>
 #include <single_collapse_data.h>
+#include <vector>
 
 int main(int argc, char *argv[]) {
   using namespace Eigen;
@@ -22,12 +22,13 @@ int main(int argc, char *argv[]) {
   // load mesh
   MatrixXd VO, V;
   MatrixXi FO, F;
-  
+
   std::string model_name = argc > 1 ? argv[1] : "bunny";
+  int pic_width = argc > 2 ? std::stoi(argv[2]) : 1280;
+  int pic_height = argc > 3 ? std::stoi(argv[3]) : 800;
+
   igl::read_triangle_mesh("../../meshes/" + model_name + ".obj", VO, FO);
-  cout << "original mesh: |V| " << VO.rows() << ", |F|: " << FO.rows()
-        << endl;
-  
+  cout << "original mesh: |V| " << VO.rows() << ", |F|: " << FO.rows() << endl;
 
   // decimate the input mesh using SSP
   SparseMatrix<double> P;
@@ -80,7 +81,6 @@ int main(int argc, char *argv[]) {
 
   // funciton to generate the picture
   auto writePNG = [&](const std::string &name, int W, int H, camera_info cam) {
-
     std::cout << "try get png" << std::endl;
     Eigen::Matrix<unsigned char, Eigen::Dynamic, Eigen::Dynamic> R, G, B, A;
     R.resize(W, H);
@@ -119,9 +119,7 @@ int main(int argc, char *argv[]) {
         R(id % W, H - 1 - id / W) = color_map[FIdx_new[id] % 20][0];
         G(id % W, H - 1 - id / W) = color_map[FIdx_new[id] % 20][1];
         B(id % W, H - 1 - id / W) = color_map[FIdx_new[id] % 20][2];
-      }
-      else
-      {
+      } else {
         A(id % W, H - 1 - id / W) = 0;
       }
     });
@@ -135,8 +133,8 @@ int main(int argc, char *argv[]) {
   viewer.launch();
   camera_info camera = std::make_tuple(viewer.core().view, viewer.core().proj,
                                        viewer.core().viewport);
-  writePNG(model_name, 1920, 1080, camera);
-  
+  writePNG(model_name, pic_width, pic_height, camera);
+
   {
     // visualize the prolongation operator
     igl::opengl::glfw::Viewer viewer;
