@@ -8,46 +8,12 @@
 #include <igl/opengl/glfw/Viewer.h>
 #include <igl/parallel_for.h>
 #include <igl/png/writePNG.h>
-
-#include <igl/unproject_onto_mesh.h>
 #include <iostream>
 #include <vector>
-
+#include "utils.hpp"
 #include <SSP_decimate.h>
 #include <query_coarse_to_fine.h>
 #include <single_collapse_data.h>
-
-typedef std::tuple<Eigen::Matrix4f, Eigen::Matrix4f, Eigen::Vector4f>
-    camera_info;
-
-std::tuple<std::vector<int>, std::vector<Eigen::Vector3d>>
-get_pt_mat(camera_info cam, const Eigen::MatrixXd &V, const Eigen::MatrixXi &F,
-           int W, int H) {
-  auto view = std::get<0>(cam);
-  auto proj = std::get<1>(cam);
-  auto vp = std::get<2>(cam);
-  std::cout << "view: " << view << std::endl;
-  std::cout << "proj: " << proj << std::endl;
-  std::cout << "vp: " << vp << std::endl;
-  std::vector<int> fids(W * H, -1);
-  std::vector<Eigen::Vector3d> bcs(W * H);
-
-  igl::parallel_for(W * H, [&](int id) {
-    int i = id / W;
-    int j = id % W;
-    int fid;
-    Eigen::Vector3f bc;
-    double x = vp(2) / (double)W * (j + 0.5);
-    double y = vp(3) / (double)H * (H - i - 0.5);
-    if (igl::unproject_onto_mesh(Eigen::Vector2f(x, y), view, proj, vp, V, F,
-                                 fid, bc)) {
-      fids[id] = fid;
-      bcs[id] = bc.cast<double>();
-    }
-  });
-
-  return std::make_tuple(fids, bcs);
-};
 
 int main(int argc, char *argv[]) {
   using namespace Eigen;
@@ -56,12 +22,12 @@ int main(int argc, char *argv[]) {
   // load mesh
   MatrixXd VO, V;
   MatrixXi FO, F;
-  {
-    std::string model_name = argc > 1 ? argv[1] : "bunny";
-    igl::read_triangle_mesh("../../meshes/" + model_name + ".obj", VO, FO);
-    cout << "original mesh: |V| " << VO.rows() << ", |F|: " << FO.rows()
-         << endl;
-  }
+  
+  std::string model_name = argc > 1 ? argv[1] : "bunny";
+  igl::read_triangle_mesh("../../meshes/" + model_name + ".obj", VO, FO);
+  cout << "original mesh: |V| " << VO.rows() << ", |F|: " << FO.rows()
+        << endl;
+  
 
   // decimate the input mesh using SSP
   SparseMatrix<double> P;
@@ -114,6 +80,8 @@ int main(int argc, char *argv[]) {
 
   // funciton to generate the picture
   auto writePNG = [&](const std::string &name, int W, int H, camera_info cam) {
+
+    std::cout << "try get png" << std::endl;
     Eigen::Matrix<unsigned char, Eigen::Dynamic, Eigen::Dynamic> R, G, B, A;
     R.resize(W, H);
     G.resize(W, H);
@@ -148,15 +116,18 @@ int main(int argc, char *argv[]) {
 
     igl::parallel_for(W * H, [&](int id) {
       if (fids[id] != -1) {
-        double local_r, local_g, local_b;
-        igl::colormap(igl::ColorMapType::COLOR_MAP_TYPE_JET,
-                      FIdx_new[id] % 100 / 100.0, local_r, local_g, local_b);
-        R(id % W, H - id / W) = (int)255 * local_r;
-        G(id % W, H - id / W) = (int)255 * local_b;
-        B(id % W, H - id / W) = (int)255 * local_g;
+        R(id % W, H - 1 - id / W) = color_map[FIdx_new[id] % 20][0];
+        G(id % W, H - 1 - id / W) = color_map[FIdx_new[id] % 20][1];
+        B(id % W, H - 1 - id / W) = color_map[FIdx_new[id] % 20][2];
+      }
+      else
+      {
+        A(id % W, H - 1 - id / W) = 0;
       }
     });
-    igl::png::writePNG(R, G, B, A, name);
+    igl::png::writePNG(R, G, B, A, name + ".png");
+    addShading(R, G, B, V, F, fids, bcs, std::get<0>(cam), false);
+    igl::png::writePNG(R, G, B, A, name + "_shading.png");
   };
 
   igl::opengl::glfw::Viewer viewer;
@@ -164,8 +135,9 @@ int main(int argc, char *argv[]) {
   viewer.launch();
   camera_info camera = std::make_tuple(viewer.core().view, viewer.core().proj,
                                        viewer.core().viewport);
-  writePNG("output.png", 1920, 1080, camera);
-  /*
+  writePNG(model_name, 1920, 1080, camera);
+  
+  {
     // visualize the prolongation operator
     igl::opengl::glfw::Viewer viewer;
     Vector4f backColor;
@@ -198,5 +170,5 @@ int main(int argc, char *argv[]) {
       return true;
     };
     viewer.launch();
-    */
+  }
 }

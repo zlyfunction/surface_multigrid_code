@@ -21,7 +21,7 @@ foreach(dir ${dirs})
   message(STATUS "dir='${dir}'")
 endforeach()
 
-file(GLOB SRCFILES *.cpp ../src/*.cpp)
+file(GLOB SRCFILES *.cpp *.hpp ../src/*.cpp)
 add_executable(${PROJECT_NAME}_bin ${SRCFILES})
 
 target_link_libraries(${PROJECT_NAME}_bin igl::core igl::opengl igl::opengl_glfw igl::png)
